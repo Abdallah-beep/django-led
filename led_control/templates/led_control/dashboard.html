@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pilotage LED ESP32</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; padding: 2rem; }
+        h1 { font-size: 1.8rem; color: #38bdf8; margin-bottom: 0.5rem; }
+        .subtitle { color: #94a3b8; margin-bottom: 2rem; font-size: 0.9rem; }
+        .add-device { display: flex; gap: 1rem; margin-bottom: 2rem; }
+        .add-device input { flex: 1; padding: 0.6rem 1rem; border-radius: 8px; border: 1px solid #334155; background: #1e293b; color: #e2e8f0; font-size: 1rem; }
+        .add-device button { padding: 0.6rem 1.5rem; border-radius: 8px; border: none; background: #0ea5e9; color: white; cursor: pointer; font-size: 1rem; }
+        .add-device button:hover { background: #0284c7; }
+        .devices { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem; }
+        .card { background: #1e293b; border-radius: 16px; padding: 1.5rem; border: 1px solid #334155; }
+        .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+        .device-id { font-weight: bold; font-size: 1.1rem; color: #f1f5f9; }
+        .status { font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 999px; }
+        .status.on { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+        .status.off { background: #1c1917; color: #94a3b8; border: 1px solid #44403c; }
+        .led-indicator { width: 60px; height: 60px; border-radius: 50%; margin: 1rem auto; transition: all 0.3s; }
+        .led-indicator.on { background: #facc15; box-shadow: 0 0 30px #facc15, 0 0 60px #f59e0b; }
+        .led-indicator.off { background: #374151; box-shadow: none; }
+        .controls { display: flex; gap: 0.75rem; margin-top: 1rem; }
+        .btn { flex: 1; padding: 0.6rem; border-radius: 8px; border: none; cursor: pointer; font-size: 0.9rem; font-weight: 600; transition: all 0.2s; }
+        .btn-on { background: #166534; color: #4ade80; }
+        .btn-on:hover { background: #15803d; }
+        .btn-off { background: #3f3f46; color: #a1a1aa; }
+        .btn-off:hover { background: #52525b; }
+        .updated { font-size: 0.75rem; color: #64748b; margin-top: 0.75rem; text-align: center; }
+        .api-info { margin-top: 3rem; background: #1e293b; border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; }
+        .api-info h2 { color: #38bdf8; margin-bottom: 1rem; }
+        .api-info code { background: #0f172a; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.85rem; color: #a5f3fc; }
+        .api-row { margin: 0.5rem 0; }
+        .empty { text-align: center; color: #64748b; padding: 3rem; grid-column: 1/-1; }
+    </style>
+</head>
+<body>
+    <h1>⚡ Pilotage LED ESP32</h1>
+    <p class="subtitle">Contrôlez vos cartes TTGO T-Call depuis ce tableau de bord</p>
+
+    <div class="add-device">
+        <input type="text" id="newDeviceId" placeholder="ID appareil (ex: ttgo01)" />
+        <button onclick="addDevice()">+ Ajouter</button>
+    </div>
+
+    <div class="devices" id="devices">
+        {% if devices %}
+            {% for device in devices %}
+            <div class="card" id="card-{{ device.device_id }}">
+                <div class="card-header">
+                    <span class="device-id">{{ device.device_id }}</span>
+                    <span class="status {% if device.led_state %}on{% else %}off{% endif %}">
+                        {% if device.led_state %}● ON{% else %}○ OFF{% endif %}
+                    </span>
+                </div>
+                <div class="led-indicator {% if device.led_state %}on{% else %}off{% endif %}" id="led-{{ device.device_id }}"></div>
+                <div class="controls">
+                    <button class="btn btn-on" onclick="setLed('{{ device.device_id }}', 'on')">💡 Allumer</button>
+                    <button class="btn btn-off" onclick="setLed('{{ device.device_id }}', 'off')">🌑 Éteindre</button>
+                </div>
+                <p class="updated" id="upd-{{ device.device_id }}">Mis à jour : {{ device.updated_at|date:"d/m/Y H:i:s" }}</p>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p class="empty">Aucun appareil enregistré. Ajoutez un ID ci-dessus ou attendez la première connexion de l'ESP32.</p>
+        {% endif %}
+    </div>
+
+    <div class="api-info">
+        <h2>🔌 Endpoints API</h2>
+        <div class="api-row">Lire état : <code>GET /api/led/&lt;device_id&gt;/</code></div>
+        <div class="api-row">Allumer : <code>GET /api/led/&lt;device_id&gt;/on/</code></div>
+        <div class="api-row">Éteindre : <code>GET /api/led/&lt;device_id&gt;/off/</code></div>
+        <div class="api-row">Liste appareils : <code>GET /api/devices/</code></div>
+    </div>
+
+    <script>
+        async function setLed(deviceId, state) {
+            const res = await fetch(`/api/led/${deviceId}/${state}/`);
+            const data = await res.json();
+            updateCard(deviceId, data.led);
+        }
+
+        async function addDevice() {
+            const id = document.getElementById('newDeviceId').value.trim();
+            if (!id) return alert("Entrez un ID d'appareil.");
+            const res = await fetch(`/api/led/${id}/off/`);
+            if (res.ok) location.reload();
+        }
+
+        function updateCard(deviceId, ledState) {
+            const led = document.getElementById(`led-${deviceId}`);
+            const status = document.querySelector(`#card-${deviceId} .status`);
+            const upd = document.getElementById(`upd-${deviceId}`);
+
+            if (ledState) {
+                led.className = 'led-indicator on';
+                status.className = 'status on';
+                status.textContent = '● ON';
+            } else {
+                led.className = 'led-indicator off';
+                status.className = 'status off';
+                status.textContent = '○ OFF';
+            }
+            upd.textContent = 'Mis à jour : ' + new Date().toLocaleString('fr-FR');
+        }
+
+        // Rafraîchissement auto toutes les 10s
+        setInterval(async () => {
+            const res = await fetch('/api/devices/');
+            const data = await res.json();
+            data.devices.forEach(d => updateCard(d.device_id, d.led_state));
+        }, 10000);
+    </script>
+</body>
+</html>
